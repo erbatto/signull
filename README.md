@@ -1,22 +1,173 @@
-# Signull — random-signature null testing for molecular biomarkers
+# signull - random-signature null testing for molecular biomarkers
 
 Given a candidate gene signature, a cohort expression matrix and a **binary** outcome,
-answer one question with a defensible number:
+`signull` answers one question with a defensible number:
 
-> Is this signature more predictive than signatures of the same size drawn at random
-> from the same dataset?
+> Is this signature more predictive than signatures of the same size, and the same kind,
+> drawn at random from this same dataset?
 
-Motivated by the finding that 60% of 47 published breast-cancer outcome signatures were
-no better than size-matched random signatures, and that >90% of random signatures longer
-than 100 genes were significant outcome predictors (Venet et al. 2011, PLoS Comput Biol).
+For most published signatures the honest answer turns out to be *no*. Venet et al. (2011)
+found that 60% of 47 published breast-cancer outcome signatures were no better than
+size-matched random gene sets, that 23% were worse than the median random one, and that
+more than 90% of random signatures longer than 100 genes were themselves significant
+outcome predictors. A signature that "validates" against a chance baseline of 0.5 has not
+been validated against the baseline that matters.
 
-Status: waves 1-2 complete. The data, nulls, scoring and metrics packages are implemented
-and tested (87 tests); the orchestration pipeline, CLI, report layer and the Sec. 7
-calibration acceptance tests are wave 3.
+## What the tool actually computes
+
+Three numbers, from two different and **non-interchangeable** nulls:
+
+| Null | Question it answers | What varies |
+|---|---|---|
+| **N0** uniform random gene sets | is this set special among *any* sets of this size? | the gene set, drawn uniformly |
+| **N1** property-matched random gene sets | is this set special among *comparable* sets? | the gene set, matched on gene properties |
+| **N2** label permutation | is there *any* outcome signal here at all? | the labels |
+
+N2 answering "yes" while N1 answers "no" is the normal result for a real cohort with a
+dominant biological axis, and it is the result the field keeps misreading as validation.
+The tool reports every null it ran, side by side, and has no verdict field.
+
+The p-value is the add-one estimator `(1 + r) / (1 + K)`, so it can never be exactly zero:
+an uncorrected zero claims infinite evidence from a finite number of draws. The attainable
+floor `1/(K+1)` is reported with it.
+
+## What makes it different from what exists
+
+`sigCheckRandom()` in Bioconductor's SigCheck already builds a size-matched random-signature
+null. Four things here do not exist elsewhere:
+
+1. **Property-matched nulls.** SigCheck and singscore sample uniformly from all available
+   features. Signature genes are typically higher-expressed and more variable than a uniform
+   draw, so an unmatched null is misspecified in the direction that *flatters the candidate*.
+   `signull` matches each drawn gene to its candidate gene's own bin, nested on mean
+   expression, then variance, then detection rate. Bin-matched control sets exist in
+   `scanpy.score_genes` and `Seurat::AddModuleScore`, and covariate matching exists in
+   `nullranges`, but nobody had connected property matching to signature significance testing.
+2. **Python.** `gseapy`, `decoupler` and `pyUCell` score signatures; none of them test one.
+3. **Calibration as a shipped acceptance test.** Under permuted labels the reported p-values
+   must be approximately uniform. If they are not, the tool is broken and says so.
+4. **Latent-axis adjustment.** Adjusting for a proliferation metagene abrogated almost all
+   outcome association of published *and* random signatures in Venet et al.; more than half
+   the breast-cancer transcriptome correlates with that single axis. A null that ignores the
+   dominant axis is measuring the wrong thing.
+
+And one structural difference: `SigCheck$checkPval` can return exactly `0`. This one cannot.
+
+## How it works
+
+1. **Load.** Matrix (genes x samples, log-like units), outcome and signature, each with a
+   sha256 provenance record.
+2. **Align.** Sample identifiers are intersected, so candidate and nulls are provably scored
+   on the same patients.
+3. **Gene statistics** are computed *after* alignment, on the analysis cohort only. Matching
+   against statistics from a larger raw cohort silently misspecifies the null.
+4. **Resolve.** Signature identifiers are mapped onto the matrix index exactly once. Missing
+   and unmapped genes are tracked separately and always reported. Nulls are sized to the
+   **effective** signature size, never the nominal one.
+5. **Eligible background.** The universe is built from this dataset: expression filter,
+   `sd > 0`, control probes out, optional platform restriction. The share of random signatures
+   reaching significance ranges from ~1% to ~40% across datasets, so a universe borrowed from
+   elsewhere makes the p-value meaningless.
+6. **Score and evaluate.** The *same scorer instance*, metric and direction policy are applied
+   to the candidate and to every draw. Unsigned gene sets have arbitrary score direction, so
+   the metric is symmetrized about its chance level for candidate and nulls alike.
+7. **p-value**, with the resolution floor and the full config that produced it.
+
+## What it refuses to do
+
+Refusals are features here; each one has a documented failure mode behind it.
+
+- Emit a p-value from fewer than 2000 draws (relative SE at `p = 0.05` is 13.8% at K = 999).
+- Fall back to unmatched sampling when a matching bin runs dry. It widens bins, records that
+  it did, and otherwise raises.
+- Proceed when the signature resolves to less than 70% of its identifiers, or when the
+  cohort has fewer than 30 samples or fewer than 8 in either class, or when the background
+  is smaller than 2000 genes or 20x the signature.
+- Pick the scorer, adjustment or metric that yields the smallest p-value.
+- Call anything "validation" when the signature was derived on the same cohort.
+- Report "worse than random" as a positive finding. It is a data-quality flag.
+
+## Status
+
+Waves 1-2 are complete: `data`, `nulls`, `scoring` and `metrics` are implemented and tested
+(87 tests). The orchestration pipeline, the CLI, the report layer and the T1-T7 calibration
+acceptance tests of `docs/statistical-design.md` Sec. 7 are wave 3.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest
 ```
 
-See `docs/` for the statistical design, the prior-art survey and the architecture contract.
+Until the pipeline lands, the packages compose directly:
+
+```python
+import numpy as np
+from signull.data import eligible_background, resolve_signature
+from signull.metrics import AurocMetric, DirectedMetric
+from signull.nulls import (RandomGeneSetNull, SeedStream, default_matching_spec,
+                           empirical_p_value, generator_for)
+from signull.scoring import MeanZScoreScorer
+from signull.types import DirectionPolicy, NullSpec, NullType
+
+# matrix:    signull.data.load_matrix_tsv(...)   genes x samples
+# outcome:   signull.data.load_outcome_tsv(...)  binary endpoint
+# signature: signull.data.load_signature_list(...)
+dataset = matrix.align_to(outcome)                       # same samples, one order
+candidate, resolution = resolve_signature(signature, dataset.matrix)
+background = eligible_background(dataset, candidate=candidate)
+
+scorer = MeanZScoreScorer()
+metric = DirectedMetric(AurocMetric(), DirectionPolicy.SYMMETRIZED)
+observed = metric(scorer.score(dataset, candidate, np.random.default_rng(0)), dataset.outcome)
+
+model = RandomGeneSetNull(
+    spec=NullSpec(null_type=NullType.RANDOM_GENE_SET,
+                  matching=default_matching_spec(background.size)),
+    universe=background.genes,
+)
+null_stats = [
+    metric(scorer.score(dataset, draw.signature, np.random.default_rng(0)), draw.outcome)
+    for draw in model.draw(candidate, dataset, 2000, generator_for(99, SeedStream.GENE_SET))
+]
+print(empirical_p_value(observed, np.asarray(null_stats)))
+```
+
+## Package map
+
+```
+types.py   the contracts; imports nothing from signull
+data/      loading, alignment, identifier resolution, eligible background
+nulls/     random gene-set and label-permutation samplers, the p-value estimator
+scoring/   signature scoring strategies (mean z-score, eigengene, supervised CV)
+metrics/   AUROC, average precision, direction policy, confidence intervals
+report/    rendering (wave 3)
+```
+
+`data`, `nulls`, `scoring` and `metrics` each depend on `types` and on no sibling, so the
+loop that joins a sampler to a scorer can only live above them. That is what makes "the same
+scoring method is applied to the candidate and to every null draw" structurally true rather
+than a convention someone has to remember.
+
+## Documentation
+
+- `docs/statistical-design.md` - the nulls, the matching scheme, the p-value, cross-validation
+  and leakage, the T1-T7 acceptance tests, the mandatory refusals.
+- `docs/prior-art-and-data.md` - what SigCheck, singscore, sigQC, GSVA, AUCell and the rest
+  do and do not do, and the GSE25055 benchmark cohort.
+- `docs/architecture.md` - module boundaries, the call flow, the gene identifier policy and
+  the error taxonomy.
+
+## References
+
+- Venet D, Dumont JE, Detours V. *Most random gene expression signatures are significantly
+  associated with breast cancer outcome.* PLoS Comput Biol 2011;7(10):e1002240.
+- Starmans MHW et al. *A simple but highly effective approach to evaluate the prognostic
+  performance of gene expression signatures.* PLoS ONE 2011;6(12):e28320.
+- Michiels S, Koscielny S, Hill C. *Prediction of cancer outcome with microarrays: a multiple
+  random validation strategy.* Lancet 2005;365(9458):488-92.
+- Ambroise C, McLachlan GJ. *Selection bias in gene extraction on the basis of microarray
+  gene-expression data.* PNAS 2002;99(10):6562-6.
+- Phipson B, Smyth GK. *Permutation P-values should never be zero.* Stat Appl Genet Mol Biol
+  2010;9(1):Article 39.
+
+`docs/statistical-design.md` Sec. 10 carries the full list with DOIs.
