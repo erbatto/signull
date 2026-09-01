@@ -1,4 +1,4 @@
-# signull — random-signature null testing for molecular biomarkers
+# Signull — random-signature null testing for molecular biomarkers
 
 Given a candidate gene signature, a cohort expression matrix and a **binary** outcome,
 answer one question with a defensible number:
