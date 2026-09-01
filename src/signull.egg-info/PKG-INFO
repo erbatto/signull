@@ -1,3 +1,17 @@
+Metadata-Version: 2.4
+Name: signull
+Version: 0.2.0
+Summary: Random-signature null testing for molecular biomarkers
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=2.0
+Requires-Dist: pandas>=2.2
+Requires-Dist: scipy>=1.11
+Requires-Dist: scikit-learn>=1.4
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+
 # signull - random-signature null testing for molecular biomarkers
 
 Given a candidate gene signature, a cohort expression matrix and a **binary** outcome,
@@ -97,28 +111,6 @@ acceptance tests of `docs/statistical-design.md` Sec. 7 are wave 3.
 python -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest
 ```
-
-A runnable tour of all of the above, on a synthetic cohort built to contain the confound,
-takes about 18 seconds:
-
-```bash
-.venv/bin/python examples/demo.py
-```
-
-```
-signature            m   AUROC     p N0     p N1     p N2
----------------------------------------------------------
-AXIS_50             50   0.754   0.0400   0.2064   0.0005
-RANDOM_50           50   0.623   0.9335   0.8471   0.0165
-CAUSAL_25           25   0.795   0.0010   0.0015   0.0005
-```
-
-`AXIS_50` is 50 genes taken off the cohort's dominant axis. Conventionally it is a hit -
-AUROC 0.75, permutation p at the resolution floor - and the uniform null agrees with that
-verdict. The matched null does not: among gene sets with the same expression and variance
-profile it is unremarkable. `RANDOM_50` is 50 genes out of a hat, and permutation still
-calls it significant. `CAUSAL_25` is small against all three nulls, which is what a
-signature carrying its own signal looks like.
 
 Until the pipeline lands, the packages compose directly:
 
