@@ -10,4 +10,13 @@ Motivated by the finding that 60% of 47 published breast-cancer outcome signatur
 no better than size-matched random signatures, and that >90% of random signatures longer
 than 100 genes were significant outcome predictors (Venet et al. 2011, PLoS Comput Biol).
 
-Status: scaffold. See `docs/` for the design specs produced by the fleet session.
+Status: waves 1-2 complete. The data, nulls, scoring and metrics packages are implemented
+and tested (87 tests); the orchestration pipeline, CLI, report layer and the Sec. 7
+calibration acceptance tests are wave 3.
+
+```bash
+python -m venv .venv && .venv/bin/pip install -e '.[dev]'
+.venv/bin/pytest
+```
+
+See `docs/` for the statistical design, the prior-art survey and the architecture contract.

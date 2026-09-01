@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Final, Literal
 
 import numpy as np
@@ -52,12 +53,14 @@ from signull.types import (
 )
 
 from .diagnostics import DiagnosticCode, DiagnosticLog
+from .provenance import file_provenance
 
 __all__ = [
     "Orientation",
     "GENES_X_SAMPLES",
     "SAMPLES_X_GENES",
     "DenseExpressionMatrix",
+    "load_matrix_tsv",
     "detection_dimension_is_degenerate",
     "emit_detection_degeneracy",
     "DETECTION_DEGENERACY_SD",
@@ -666,3 +669,72 @@ def emit_detection_degeneracy(stats: GeneStats, log: DiagnosticLog) -> None:
                 "threshold": DETECTION_DEGENERACY_SD,
             },
         )
+
+
+def load_matrix_tsv(
+    path: Path | str,
+    *,
+    dataset_id: str | None = None,
+    units: str,
+    namespace: GeneIdNamespace = GeneIdNamespace.HGNC_SYMBOL,
+    orientation: Orientation = GENES_X_SAMPLES,
+    sep: str = "\t",
+    index_column: int | str = 0,
+    preprocessing: tuple[str, ...] = (),
+    detection_threshold: float = 0.0,
+    source: str | None = None,
+    citation: str | None = None,
+    expected_checksum: str | None = None,
+    log: DiagnosticLog | None = None,
+) -> "DenseExpressionMatrix":
+    """Read a delimited expression matrix from disk, checksum included.
+
+    The file's sha256 is computed and attached as
+    :class:`~signull.types.Provenance`, so a result can be traced back to the
+    exact bytes it was computed from.  ``expected_checksum`` turns that into a
+    check: a mismatch is reported as a tier-2 diagnostic by
+    :func:`~signull.data.provenance.file_provenance`.
+
+    Parameters
+    ----------
+    orientation:
+        Declared layout of the *file*.  ``"samples_x_genes"`` is transposed once
+        here; the orientation is never guessed from the shape, because a cohort
+        with more samples than measured genes is unusual but legal.
+    units:
+        Value scale, e.g. ``"log2 RMA"`` or ``"log2 CPM"``.  Required: the
+        detection threshold and the expression filter are both in these units.
+    index_column:
+        Column holding the gene identifiers (or sample identifiers under
+        ``samples_x_genes``).  Position or name.
+
+    Raises
+    ------
+    ValueError
+        Non-numeric or non-finite values, duplicate identifiers, or a frame that
+        does not satisfy the :class:`DenseExpressionMatrix` invariants.
+    """
+    path = Path(path)
+    log = log if log is not None else DiagnosticLog()
+    frame = pd.read_csv(path, sep=sep, index_col=index_column)
+    frame.index = pd.Index([str(v) for v in frame.index], name="gene_id")
+    provenance = file_provenance(
+        path,
+        source=source or f"file:{path.name}",
+        citation=citation,
+        identifier=dataset_id,
+        expected_checksum=expected_checksum,
+        notes=f"delimited matrix, declared orientation {orientation!r}, units {units!r}",
+        log=log,
+    )
+    return DenseExpressionMatrix.from_frame(
+        frame,
+        dataset_id=dataset_id or path.stem,
+        units=units,
+        namespace=namespace,
+        orientation=orientation,
+        preprocessing=preprocessing,
+        detection_threshold=detection_threshold,
+        provenance=provenance,
+        log=log,
+    )

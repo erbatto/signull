@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "signull"
+version = "0.2.0"
+description = "Random-signature null testing for molecular biomarkers"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "scipy>=1.11",
+    "scikit-learn>=1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+filterwarnings = ["error::RuntimeWarning"]

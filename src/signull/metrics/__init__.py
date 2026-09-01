@@ -28,6 +28,9 @@ This package depends only on :mod:`signull.types`.  It imports nothing from
 
 from __future__ import annotations
 
+from typing import Final, Mapping
+
+from ..types import MetricName
 from .direction import (
     AsymmetricDirectionError,
     DirectedMetric,
@@ -67,6 +70,8 @@ from .intervals import (
 )
 
 __all__ = [
+    "REGISTRY",
+    "get",
     "AsymmetricDirectionError",
     "AurocMetric",
     "AurocReport",
@@ -97,3 +102,17 @@ __all__ = [
     "tie_fraction",
     "validate_scores",
 ]
+
+#: ``MetricName -> factory``.  Mirrors ``scoring.REGISTRY`` and
+#: ``nulls.REGISTRY`` so the CLI resolves every strategy the same way
+#: (``docs/architecture.md`` Sec. 2).
+REGISTRY: Final[Mapping[MetricName, type]] = {
+    MetricName.AUROC: AurocMetric,
+    MetricName.AVERAGE_PRECISION: AveragePrecisionMetric,
+}
+
+
+def get(name: MetricName | str, **params: object):
+    """Instantiate the metric registered under ``name``."""
+    key = MetricName(name)
+    return REGISTRY[key](**params)  # type: ignore[operator]

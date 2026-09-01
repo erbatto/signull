@@ -25,9 +25,9 @@ predictive than chance.
 | 1 | Statistical design of the null | docs/statistical-design.md | none | complete | 1 | research scout |
 | 2 | Prior art + benchmark data acquisition | docs/prior-art-and-data.md, scripts/ | none | complete | 1 | research scout |
 | 3 | Architecture + data contracts | docs/architecture.md, src/signull/types.py | none | complete | 1 | architecture scout |
-| 4 | Data layer: loaders, signature I/O, entity resolution | src/signull/data/, tests/test_data.py | 3 | pending | 2 | builder |
-| 5 | Null engine: sampling schemes, matching, permutation | src/signull/nulls/, tests/test_nulls.py | 1,3 | pending | 2 | builder |
-| 6 | Scoring + metrics: signature scoring, AUC/AP, CV | src/signull/scoring/, src/signull/metrics/, tests/test_scoring.py | 1,3 | pending | 2 | builder |
+| 4 | Data layer: loaders, signature I/O, entity resolution | src/signull/data/, tests/test_data.py | 3 | complete | 2 | builder |
+| 5 | Null engine: sampling schemes, matching, permutation | src/signull/nulls/, tests/test_nulls.py | 1,3 | complete | 2 | builder |
+| 6 | Scoring + metrics: signature scoring, AUC/AP, CV | src/signull/scoring/, src/signull/metrics/, tests/test_scoring.py | 1,3 | complete | 2 | builder |
 | 7 | Integration, CLI, report, calibration test on real data | src/signull/report/, src/signull/cli.py, tests/test_calibration.py | 4,5,6 | pending | 3 | integrator |
 
 ## Shared Context (Discovery Relay — seeded from the prior brainstorm register)
@@ -153,7 +153,76 @@ Both seams above are now CLOSED in `src/signull/types.py`:
 Verified: imports clean, 46 exports, frozen-ness intact, `NullSpec().n_draws == 10000 >= MIN_DRAWS`.
 **`src/signull/types.py` is FROZEN for Wave 2.** Any further contract change routes through Fleet.
 
+## Wave 2 Results (closed 2026-09-01, second machine)
+
+Wave 2 landed in two parts: the module bodies arrived with commit `b4e7dad`, and this
+session closed the remaining gaps, added the package surfaces and wrote the test suite.
+
+### Environment on this machine (Linux, `/media/sergio/Data/Universita/CIBB2026-signull/signull`)
+The conda env recorded above is on the **Mac** session root and does not exist here. A
+project-local `.venv/` (gitignored) was created from `~/miniconda3` and pinned by
+`pyproject.toml`: Python 3.12, numpy 2.5.2, pandas 3.0.5, scipy 1.18.1, scikit-learn 1.9.0,
+pytest 9.1.1. Same major versions as the relay note, so the pandas-3 / numpy-2 caveats stand.
+
+### What this session added
+- `data/resolve.py` — `MatrixIndexResolver` (implements `GeneIdResolver`) plus
+  `AnnotationTable`, `load_annotation_table`, `resolve_signature`, `strip_version_suffix`.
+  Implements all nine rules of `docs/architecture.md` Sec. 4: matched genes come back in
+  **matrix row order** with weights carried along, missing and unmapped are tracked
+  separately, ambiguous annotation entries are dropped rather than guessed, the F5 overlap
+  floor raises *before* any low-overlap warning, and collapses are enumerated.
+- `data/universe.py` — `eligible_background` (Sec. 2.1: sd>0, expression filter with the
+  `median` escape route, platform restriction, `AFFX-` controls, optional candidate
+  exclusion) and `check_background_floors` (Sec. 8 F4: `|B| >= 2000` and `|B| >= 20 m`,
+  raising `BackgroundTooSmallError`).
+- `data/matrix.py` — added `load_matrix_tsv`, the missing file-level matrix loader, with a
+  sha256 provenance record and a declared (never guessed) orientation.
+- `nulls/samplers.py` — `RandomGeneSetNull` and `LabelPermutationNull`, both satisfying the
+  `NullModel` protocol, plus `REGISTRY`/`get`. Enforces `MIN_DRAWS` at the point of
+  generation (`DrawFloorError`, opt-out for the reduced-resolution supervised path), reuses
+  the candidate's weight multiset for signed candidates, records a diagnostic when a draw
+  had to reach into neighbouring bins, and implements the `mean_abs_correlation` set-level
+  constraint by rejection sampling. Exhaustive permutation enumeration is deliberately NOT
+  implemented and the docstring says why: with the F3 cohort floors the smallest reachable
+  `C(N, n1)` is `C(30,8) = 5852925`, so the `<= 20000` branch is unreachable dead code.
+- `scoring/supervised.py` — `SupervisedModelScorer` (Path B): one sklearn Pipeline fitted
+  per fold, gene selection by `|t|` **inside** the training fold, folds derived from
+  `CVSpec.seed` and never from the per-draw generator (so fold noise cannot inflate the
+  null), out-of-fold probabilities rank-normalised per repeat before averaging.
+- Package surfaces: `data/__init__.py`, `nulls/__init__.py`, `scoring/__init__.py`,
+  `signull/__init__.py`, plus `REGISTRY`/`get` in `metrics/__init__.py`. All four analysis
+  packages now expose the registry the architecture asks for.
+- `pyproject.toml` (setuptools, `src` layout, pytest `pythonpath`).
+- `tests/conftest.py` + `tests/test_data.py` (28), `tests/test_nulls.py` (32),
+  `tests/test_scoring.py` (27). **87 passed in ~2 s.**
+
+### Verified
+- Import direction holds: `data`, `nulls`, `scoring`, `metrics` each import `types` and no
+  sibling analysis package (grepped, clean).
+- `nulls/` contains no evaluation loop, so the Wave-1 collision risk with Wave 3 did not
+  materialise.
+- End-to-end smoke on a 6000 x 120 synthetic cohort with a planted dominant axis, m = 50
+  highest-variance candidate, mean-z scoring, symmetrized AUROC, K = 2000 per null
+  (8 s total): observed AUC **0.854**; N0 uniform p = 0.234, N1 matched p = 0.354,
+  N2 permutation p = 0.0005. Exactly the Venet configuration — the labels carry real signal,
+  and both competitive nulls correctly decline to call the signature special, while the
+  self-contained null screams. The three nulls are visibly not interchangeable.
+
+### Notes for Wave 3
+1. `resolve_signature` takes an extra `log=` keyword beyond the `GeneIdResolver` protocol
+   signature; it is keyword-only with a default, so the protocol still matches.
+2. `empirical_p_value` enforces `MIN_DRAWS` by default (`enforce_min_draws=False` opts out)
+   and `RandomGeneSetNull`/`LabelPermutationNull` enforce it again at draw time. The
+   pipeline should pass the reduced-resolution flag through in exactly one place for the
+   supervised path, and the report must render the note.
+3. `ScoringMethodName.SSGSEA` has no implementation and is absent from `scoring.REGISTRY`;
+   `get` raises rather than substituting. Either implement it or keep the refusal.
+4. The T1-T7 acceptance tests of `docs/statistical-design.md` Sec. 7 are Wave 3's
+   `tests/test_calibration.py` and are NOT yet written. The smoke run above is not one of
+   them.
+5. `data/` still has no HDF5 / AnnData loader; only TSV/CSV via `load_matrix_tsv`.
+
 ## Continuation State
-Next wave: 2
+Next wave: 3
 Blocked items: none
 Auto-continue: true
